@@ -1,52 +1,80 @@
 
+const express = require('express');
+const cors = require('cors');
+const config = require('./src/config');
+const shortid = require('shortid');
+const checksum = require("./src/lib/checksum");
+const { default: axios } = require('axios');
 
-const functions = require("firebase-functions")
-const axios = require("axios")
+const server = express();
 
+server.use(cors());
+server.use(express.json());
+server.use(express.urlencoded({extended: true}));
 
-const PaytmChecksum = require('./config/checksum')
-const PaytmConfig = require('./config/config')
+server.get("/whoami", (req, res, next) => {
+    return res.status(200).json({msg: "/ or /payments : I am the payments Service"});
+});
 
-const server = http.createServer()
+server.get('/paywithpaytm', (req, response) => {
 
-var MERCHANT_KEY = process.env("MERCHANT_KEY")
+        var paytmParams = {
+            requestType: "Payment",
+            mid: req.body.MID,
+            webisteName: req.body.WEBSITE_NAME,
+            orderId: shortid.generate(),
+            callbackUrl: req.body.CB_URL,
+            txnAmount: {
+                value: req.body.TXN_AMOUNT,
+                currency: "INR",
+            },
+            userInfo: {
+                custId: shortid.generate(),
+            },
+        };
 
-server.on('request', (req, response) => {
-    switch(req.url) {
-        case "/paynow":
-            console.log('Hello Payment Processor!');
-            
+        checksum.generateChecksum(JSON.stringify(paytmParams), config.MERCHANT_ID).then((err, checksum) => {
+            if (err) {
+                response.status(500).send(err);
+            }
+            paytmParams.CHECKSUMHASH = checksum;
+            var post_data = {body: paytmParams, head: {signature: checksum}};
 
-            var paytmParams = {
-                requestType: "Payment",
-                mid: req.body.MID,
-                webisteName: "WEBSITE",
-                orderId: req.body.ORDER_ID,
-                callbackUrl: req.body.CB_URL,
-                txnAmount: {
-                    value: req.body.TXN_AMOUNT,
-                    currency: "INR",
-                },
-                userInfo: {
-                    custId: req.body.CUST_ID,
-                },
-            };
-
-            var paytmChecksum = PaytmChecksum.generateSignature(JSON.stringify(paytmParams), MERCHANT_KEY)
-            
-            paytmChecksum.then((result) => {
-                console.log("generateSignature Returns : " + result)
-                var post_data = {body: paytmParams, head: {signature: result}};
-                let paytmInitTransactionAPIUrl = `https://securegw.paytm.in/theia/api/v1/initiateTransaction?mid=${paytmParams.mid}&orderId=${paytmParams.orderId}`;
-
-                return axios.post(paytmInitTransactionAPIUrl, post_data).then((res) => {
-                    console.log(res.data);
-                    return response.send(res.data)
-                }).catch((err) => {
-                    console.log(err);
-                    response.status(500).send(err)
-                });
+            let paytmInitTransactionAPIUrl = config.PAYTM_FINAL_URL + `?mid=${paytmParams.mid}&orderId=${paytmParams.orderId}`;
+            return axios.post(paytmInitTransactionAPIUrl, post_data).then((res) => {
+                return response.send(res.data);
+            }).catch((err) => {
+                response.status(500).send(err)
             })
-        }
+        })
     }
 )
+
+server.post("/paytmcallback", (req, response) => {
+    const paytmChecksum = req.body.CHECKSUMHASH;
+    var isVerifyChecksum = checksum.verifyChecksum(req.body, config.MERCHANT_ID, paytmChecksum)
+    if (isVerifyChecksum) {
+        var paytmParams = {
+            mid: req.body.MID,
+            orderId: req.body.ORDERID,
+        };
+
+        checksum.generateChecksum(JSON.stringify(paytmParams), config.MERCHANT_ID).then((err, checksum) => {
+            var post_data = {body: paytmParams, head: {signature: checksum}};
+
+            let paytmStatusAPIUrl = config.PAYTM_ORDER_STATUS_URL;
+            return axios.post(paytmStatusAPIUrl, post_data).then((res) => {
+                return response.status(200).send(res);
+            })
+            .catch(err => response.status(500).send(err));
+        })
+        .catch(err => response.status(500).send(err))
+
+    } else {
+        response.status(500).send({message: "Checksum mismatched"})
+    }
+})
+
+server.listen(config.SERVER_PORT, () => {
+    console.log(`Payment Processor Microservice is Listening on PORT : ${config.SERVER_PORT}`);
+})
