@@ -8,6 +8,7 @@ const { default: axios } = require('axios');
 const databaseConnection = require('./database')
 const { CreateChannel } = require('./utils')
 const customer_api = require('./api')
+const apiKeyMiddleware = require('./api/middlewares/auth');
 
 const server = express();
 
@@ -18,6 +19,7 @@ server.use(express.json());
 server.use(cors());
 server.use(express.static(__dirname + '/public'));
 
+server.use('/api', apiKeyMiddleware)
 customer_api(app, channel);
 
 server.listen(config.SERVER_PORT, () => {

@@ -1,0 +1,59 @@
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+    ports:
+      - 8080:8080
+    depends_on:
+      - mongo
+
+  # MongoDB primary node
+  mongo-primary:
+    image: mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - db-data:/data/db
+
+    command: ["--replSet", "rs0"]
+
+  # MongoDB secondary node
+  mongo-secondary:
+    image: mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - db-secondary-data:/data/db
+
+    command: ["--replSet", "rs0"]
+
+  # MongoDB arbiter node (to break ties in election)
+  mongo-arbiter:
+    image: mongo
+    restart: always
+    command: ["--replSet", "rs0", "--oplogSize", "128"]
+
+  # Backup service
+  backup:
+    image: mongo:4.4
+    depends_on:
+      - mongo-primary
+    volumes:
+      - ./backup:/backup
+    command: ["mongodump", "--host", "mongo-primary:27017", "--out", "/backup"]
+
+volumes:
+  db-primary-data:
+  db-secondary-data:
+
+secrets:
+  mongo_root_username:
+    file: ./mongo-root-username
+  mongo_root_password:
+    file: ./mongo-root-password
